@@ -847,7 +847,7 @@ isReallyTriviallyReMaterializableGeneric(const MachineInstr *MI,
 
   // Avoid instructions obviously unsafe for remat.
   if (MI->isNotDuplicable() || MI->mayStore() ||
-      MI->hasUnmodeledSideEffects())
+      MI->hasUnmodeledSideEffects() || MI->isConvergent())
     return false;
 
   // Don't remat inline asm. We have no idea how expensive it is
