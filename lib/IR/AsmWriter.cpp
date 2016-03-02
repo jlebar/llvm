@@ -411,20 +411,33 @@ static void PrintLLVMName(raw_ostream &OS, const Value *V) {
 
 
 namespace {
+// Instances of this class are sometimes created very frequently -- e.g. on
+// every call to Instruction::operator<< -- so we lazily initialize our
+// expensive data structures, in the hopes we won't need them.
 class TypePrinting {
   TypePrinting(const TypePrinting &) = delete;
   void operator=(const TypePrinting&) = delete;
+
+  void EnsureTypesInitialized();
+
+  const Module *TheModule; // May be null.
+  Optional<TypeFinder> LazyNamedTypes;
+  Optional<DenseMap<StructType *, unsigned>> LazyNumberedTypes;
+
 public:
+  explicit TypePrinting(const Module *M = nullptr) : TheModule(M) {}
 
-  /// NamedTypes - The named types that are used by the current module.
-  TypeFinder NamedTypes;
+  /// The named types that are used by the current module.
+  const TypeFinder &GetNamedTypes() {
+    EnsureTypesInitialized();
+    return *LazyNamedTypes;
+  }
 
-  /// NumberedTypes - The numbered types, along with their value.
-  DenseMap<StructType*, unsigned> NumberedTypes;
-
-  TypePrinting() = default;
-
-  void incorporateTypes(const Module &M);
+  /// The numbered types, along with their value.
+  const DenseMap<StructType *, unsigned> &GetNumberedTypes() {
+    EnsureTypesInitialized();
+    return *LazyNumberedTypes;
+  }
 
   void print(Type *Ty, raw_ostream &OS);
 
@@ -432,15 +445,26 @@ public:
 };
 } // namespace
 
-void TypePrinting::incorporateTypes(const Module &M) {
-  NamedTypes.run(M, false);
+void TypePrinting::EnsureTypesInitialized() {
+  if (LazyNamedTypes) {
+    assert(LazyNumberedTypes &&
+           "Named and numbered types are initialized together.");
+    return;
+  }
+  LazyNamedTypes.emplace();
+  LazyNumberedTypes.emplace();
+  if (!TheModule)
+    return;
+
+  LazyNamedTypes->run(*TheModule, false);
 
   // The list of struct types we got back includes all the struct types, split
   // the unnamed ones out to a numbering and remove the anonymous structs.
   unsigned NextNumber = 0;
 
-  std::vector<StructType*>::iterator NextToUse = NamedTypes.begin(), I, E;
-  for (I = NamedTypes.begin(), E = NamedTypes.end(); I != E; ++I) {
+  auto NextToUse = LazyNamedTypes->begin();
+  for (auto I = LazyNamedTypes->begin(), E = LazyNamedTypes->end(); I != E;
+       ++I) {
     StructType *STy = *I;
 
     // Ignore anonymous types.
@@ -448,14 +472,13 @@ void TypePrinting::incorporateTypes(const Module &M) {
       continue;
 
     if (STy->getName().empty())
-      NumberedTypes[STy] = NextNumber++;
+      (*LazyNumberedTypes)[STy] = NextNumber++;
     else
       *NextToUse++ = STy;
   }
 
-  NamedTypes.erase(NextToUse, NamedTypes.end());
+  LazyNamedTypes->erase(NextToUse, LazyNamedTypes->end());
 }
-
 
 /// CalcTypeName - Write the specified type to the specified raw_ostream, making
 /// use of type names or up references to shorten the type name where possible.
@@ -502,8 +525,8 @@ void TypePrinting::print(Type *Ty, raw_ostream &OS) {
     if (!STy->getName().empty())
       return PrintLLVMName(OS, STy->getName(), LocalPrefix);
 
-    DenseMap<StructType*, unsigned>::iterator I = NumberedTypes.find(STy);
-    if (I != NumberedTypes.end())
+    auto I = GetNumberedTypes().find(STy);
+    if (I != GetNumberedTypes().end())
       OS << '%' << I->second;
     else  // Not enumerated, print the hex address.
       OS << "%\"type " << STy << '\"';
@@ -2014,6 +2037,9 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Metadata *MD,
 }
 
 namespace {
+// New instances of this class are created frequently -- e.g. we get a new one
+// every time we run Instruction::operator<<.  So we do as much lazy
+// initialization as is reasonable.
 class AssemblyWriter {
   formatted_raw_ostream &Out;
   const Module *TheModule;
@@ -2021,11 +2047,15 @@ class AssemblyWriter {
   SlotTracker &Machine;
   TypePrinting TypePrinter;
   AssemblyAnnotationWriter *AnnotationWriter;
-  SetVector<const Comdat *> Comdats;
   bool IsForDebug;
   bool ShouldPreserveUseListOrder;
   UseListOrderStack UseListOrders;
   SmallVector<StringRef, 8> MDNames;
+
+  // Lazily initialized.  Don't access directly; call GetComdats().
+  Optional<SetVector<const Comdat *>> LazyComdats;
+
+  const SetVector<const Comdat *> &GetComdats();
 
 public:
   /// Construct an AssemblyWriter with an external SlotTracker
@@ -2082,18 +2112,21 @@ private:
 AssemblyWriter::AssemblyWriter(formatted_raw_ostream &o, SlotTracker &Mac,
                                const Module *M, AssemblyAnnotationWriter *AAW,
                                bool IsForDebug, bool ShouldPreserveUseListOrder)
-    : Out(o), TheModule(M), Machine(Mac), AnnotationWriter(AAW),
+    : Out(o), TheModule(M), Machine(Mac), TypePrinter(M), AnnotationWriter(AAW),
       IsForDebug(IsForDebug),
-      ShouldPreserveUseListOrder(ShouldPreserveUseListOrder) {
-  if (!TheModule)
-    return;
-  TypePrinter.incorporateTypes(*TheModule);
-  for (const Function &F : *TheModule)
-    if (const Comdat *C = F.getComdat())
-      Comdats.insert(C);
-  for (const GlobalVariable &GV : TheModule->globals())
-    if (const Comdat *C = GV.getComdat())
-      Comdats.insert(C);
+      ShouldPreserveUseListOrder(ShouldPreserveUseListOrder) {}
+
+const SetVector<const Comdat *> &AssemblyWriter::GetComdats() {
+  if (!LazyComdats) {
+    LazyComdats.emplace();
+    for (const Function &F : *TheModule)
+      if (const Comdat *C = F.getComdat())
+        LazyComdats->insert(C);
+    for (const GlobalVariable &GV : TheModule->globals())
+      if (const Comdat *C = GV.getComdat())
+        LazyComdats->insert(C);
+  }
+  return *LazyComdats;
 }
 
 void AssemblyWriter::writeOperand(const Value *Operand, bool PrintType) {
@@ -2234,6 +2267,7 @@ void AssemblyWriter::printModule(const Module *M) {
   printTypeIdentities();
 
   // Output all comdats.
+  const auto &Comdats = GetComdats();
   if (!Comdats.empty())
     Out << '\n';
   for (const Comdat *C : Comdats) {
@@ -2473,39 +2507,38 @@ void AssemblyWriter::printComdat(const Comdat *C) {
 }
 
 void AssemblyWriter::printTypeIdentities() {
-  if (TypePrinter.NumberedTypes.empty() &&
-      TypePrinter.NamedTypes.empty())
+  const auto &NumberedTypes = TypePrinter.GetNumberedTypes();
+  const auto &NamedTypes = TypePrinter.GetNamedTypes();
+  if (NumberedTypes.empty() && NamedTypes.empty())
     return;
 
   Out << '\n';
 
   // We know all the numbers that each type is used and we know that it is a
   // dense assignment.  Convert the map to an index table.
-  std::vector<StructType*> NumberedTypes(TypePrinter.NumberedTypes.size());
-  for (DenseMap<StructType*, unsigned>::iterator I =
-       TypePrinter.NumberedTypes.begin(), E = TypePrinter.NumberedTypes.end();
-       I != E; ++I) {
-    assert(I->second < NumberedTypes.size() && "Didn't get a dense numbering?");
-    NumberedTypes[I->second] = I->first;
+  std::vector<StructType *> NumberedTypesVec(NumberedTypes.size());
+  for (const auto &KV : NumberedTypes) {
+    assert(KV.second < NumberedTypes.size() && "Didn't get a dense numbering?");
+    NumberedTypesVec[KV.second] = KV.first;
   }
 
   // Emit all numbered types.
-  for (unsigned i = 0, e = NumberedTypes.size(); i != e; ++i) {
+  for (unsigned i = 0, e = NumberedTypesVec.size(); i != e; ++i) {
     Out << '%' << i << " = type ";
 
     // Make sure we print out at least one level of the type structure, so
     // that we do not get %2 = type %2
-    TypePrinter.printStructBody(NumberedTypes[i], Out);
+    TypePrinter.printStructBody(NumberedTypesVec[i], Out);
     Out << '\n';
   }
 
-  for (unsigned i = 0, e = TypePrinter.NamedTypes.size(); i != e; ++i) {
-    PrintLLVMName(Out, TypePrinter.NamedTypes[i]->getName(), LocalPrefix);
+  for (StructType *STy : NamedTypes) {
+    PrintLLVMName(Out, STy->getName(), LocalPrefix);
     Out << " = type ";
 
     // Make sure we print out at least one level of the type structure, so
     // that we do not get %FILE = type %FILE
-    TypePrinter.printStructBody(TypePrinter.NamedTypes[i], Out);
+    TypePrinter.printStructBody(STy, Out);
     Out << '\n';
   }
 }
@@ -3362,9 +3395,7 @@ static bool printWithoutType(const Value &V, raw_ostream &O,
 
 static void printAsOperandImpl(const Value &V, raw_ostream &O, bool PrintType,
                                ModuleSlotTracker &MST) {
-  TypePrinting TypePrinter;
-  if (const Module *M = MST.getModule())
-    TypePrinter.incorporateTypes(*M);
+  TypePrinting TypePrinter(MST.getModule());
   if (PrintType) {
     TypePrinter.print(V.getType(), O);
     O << ' ';
@@ -3403,10 +3434,7 @@ static void printMetadataImpl(raw_ostream &ROS, const Metadata &MD,
                               bool OnlyAsOperand) {
   formatted_raw_ostream OS(ROS);
 
-  TypePrinting TypePrinter;
-  if (M)
-    TypePrinter.incorporateTypes(*M);
-
+  TypePrinting TypePrinter(M);
   WriteAsOperandInternal(OS, &MD, &TypePrinter, MST.getMachine(), M,
                          /* FromValue */ true);
 
