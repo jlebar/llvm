@@ -1397,13 +1397,25 @@ void MachineVerifier::calcRegsPassed() {
 void MachineVerifier::calcRegsRequired() {
   // First push live-in regs to predecessors' vregsRequired.
   SmallPtrSet<const MachineBasicBlock*, 8> todo;
-  for (const auto &MBB : *MF) {
+  for (const MachineBasicBlock &MBB : *MF) {
     BBInfo &MInfo = MBBInfoMap[&MBB];
-    for (MachineBasicBlock::const_pred_iterator PrI = MBB.pred_begin(),
-           PrE = MBB.pred_end(); PrI != PrE; ++PrI) {
-      BBInfo &PInfo = MBBInfoMap[*PrI];
-      if (PInfo.addRequired(MInfo.vregsLiveIn))
-        todo.insert(*PrI);
+    for (const MachineBasicBlock *Pred : MBB.predecessors()) {
+      if (MBBInfoMap[Pred].addRequired(MInfo.vregsLiveIn))
+        todo.insert(Pred);
+    }
+  }
+
+  // Push regs used in phi nodes up to their preds.
+  for (const auto &MBB : *MF) {
+    for (const auto &MI : MBB) {
+      if (!MI.isPHI())
+        continue;
+      for (unsigned i = 1, e = MI.getNumOperands(); i != e; i += 2) {
+        unsigned Reg = MI.getOperand(i).getReg();
+        const MachineBasicBlock *Pred = MI.getOperand(i + 1).getMBB();
+        if (MBBInfoMap[Pred].addRequired(Reg))
+          todo.insert(Pred);
+      }
     }
   }
 
@@ -1413,13 +1425,11 @@ void MachineVerifier::calcRegsRequired() {
     const MachineBasicBlock *MBB = *todo.begin();
     todo.erase(MBB);
     BBInfo &MInfo = MBBInfoMap[MBB];
-    for (MachineBasicBlock::const_pred_iterator PrI = MBB->pred_begin(),
-           PrE = MBB->pred_end(); PrI != PrE; ++PrI) {
-      if (*PrI == MBB)
+    for (const MachineBasicBlock *Pred : MBB->predecessors()) {
+      if (Pred == MBB)
         continue;
-      BBInfo &SInfo = MBBInfoMap[*PrI];
-      if (SInfo.addRequired(MInfo.vregsRequired))
-        todo.insert(*PrI);
+      if (MBBInfoMap[Pred].addRequired(MInfo.vregsRequired))
+        todo.insert(Pred);
     }
   }
 }
