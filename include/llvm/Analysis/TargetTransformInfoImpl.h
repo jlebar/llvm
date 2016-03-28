@@ -128,6 +128,11 @@ public:
     return TTI::TCC_Basic * (NumArgs + 1);
   }
 
+  std::pair<int, int>
+  getInliningThresholdMultiplier(const Function * /* Caller */) {
+    return {1, 1};
+  }
+
   unsigned getIntrinsicCost(Intrinsic::ID IID, Type *RetTy,
                             ArrayRef<Type *> ParamTys) {
     switch (IID) {

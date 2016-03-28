@@ -66,6 +66,15 @@ int TargetTransformInfo::getCallCost(const Function *F,
   return Cost;
 }
 
+std::pair<int, int> TargetTransformInfo::getInliningThresholdMultiplier(
+    const Function *Caller) const {
+  std::pair<int, int> Multiplier =
+      TTIImpl->getInliningThresholdMultiplier(Caller);
+  assert(Multiplier.first >= 0 && "Multiplier numerator cannot be negative");
+  assert(Multiplier.second > 0 && "Multiplier denominator must be positive");
+  return Multiplier;
+}
+
 int TargetTransformInfo::getIntrinsicCost(
     Intrinsic::ID IID, Type *RetTy, ArrayRef<const Value *> Arguments) const {
   int Cost = TTIImpl->getIntrinsicCost(IID, RetTy, Arguments);

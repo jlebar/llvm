@@ -620,6 +620,11 @@ void CallAnalyzer::updateThreshold(CallSite CS, Function &Callee) {
        ColdThreshold.getNumOccurrences() > 0) &&
       ColdCallee && ColdThreshold < Threshold)
     Threshold = ColdThreshold;
+
+  // Finally, take the target-specific inlining threshold multiplier into
+  // account.
+  std::pair<int, int> Mult = TTI.getInliningThresholdMultiplier(Caller);
+  Threshold = Threshold * Mult.first / Mult.second;
 }
 
 bool CallAnalyzer::visitCmpInst(CmpInst &I) {

@@ -216,6 +216,11 @@ public:
     return BaseT::getOperationCost(Opcode, Ty, OpTy);
   }
 
+  std::pair<int, int>
+  getInliningThresholdMultiplier(const Function * /* Caller */) {
+    return {1, 1};
+  }
+
   void getUnrollingPreferences(Loop *L, TTI::UnrollingPreferences &UP) {
     // This unrolling functionality is target independent, but to provide some
     // motivation for its intended use, for x86:
