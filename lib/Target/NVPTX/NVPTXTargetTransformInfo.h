@@ -52,6 +52,8 @@ public:
 
   bool isSourceOfDivergence(const Value *V);
 
+  std::pair<int, int> getInliningThresholdMultiplier(const Function *Caller);
+
   int getArithmeticInstrCost(
       unsigned Opcode, Type *Ty,
       TTI::OperandValueKind Opd1Info = TTI::OK_AnyValue,

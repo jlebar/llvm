@@ -46,6 +46,13 @@ static bool isNVVMAtomic(const IntrinsicInst *II) {
   }
 }
 
+std::pair<int, int>
+NVPTXTTIImpl::getInliningThresholdMultiplier(const Function * /* Caller */) {
+  // Increase the inlining cost threshold by a factor of 5, reflecting that
+  // calls are particularly expensive in NVPTX.
+  return {5, 1};
+}
+
 bool NVPTXTTIImpl::isSourceOfDivergence(const Value *V) {
   // Without inter-procedural analysis, we conservatively assume that arguments
   // to __device__ functions are divergent.
