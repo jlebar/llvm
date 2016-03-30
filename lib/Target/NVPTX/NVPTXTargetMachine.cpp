@@ -167,6 +167,10 @@ TargetPassConfig *NVPTXTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new NVPTXPassConfig(this, PM);
 }
 
+void NVPTXTargetMachine::addEarlyAsPossiblePasses(PassManagerBase &PM) {
+  PM.add(createNVVMReflectPass());
+}
+
 TargetIRAnalysis NVPTXTargetMachine::getTargetIRAnalysis() {
   return TargetIRAnalysis([this](const Function &F) {
     return TargetTransformInfo(NVPTXTTIImpl(this, F));
@@ -228,7 +232,6 @@ void NVPTXPassConfig::addIRPasses() {
   disablePass(&PostRASchedulerID);
   disablePass(&FuncletLayoutID);
 
-  addPass(createNVVMReflectPass());
   if (getOptLevel() != CodeGenOpt::None)
     addPass(createNVPTXImageOptimizerPass());
   addPass(createNVPTXAssignValidGlobalNamesPass());
